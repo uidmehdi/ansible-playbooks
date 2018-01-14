@@ -1,0 +1,93 @@
+---
+- hosts: all
+
+  vars:
+    container1_ssh_port: 2022
+    container2_ssh_port: 2023
+    user_name: 'docker_root'
+
+  roles:
+    - { role: uidmehdi.ssh-container,
+        base_dir: '~/ansible_container',
+        pubkey_dir: '~/ansible_container/pubkey_dir',
+        user_name: 'docker_root',
+        user_uid: 1000,
+        upassword: 'password'
+      }
+
+  tasks:
+
+  - name: run container1
+    docker_container:
+      name: sshubucon1
+      image: "uidmehdi/sshubuimg:ubuntu1604"
+      state: started
+      published_ports:
+      - "{{container1_ssh_port}}:22"
+
+  - name: run container2
+    docker_container:
+      name: sshubucon2
+      image: "uidmehdi/sshubuimg:ubuntu1604"
+      state: started
+      published_ports:
+      - "{{container2_ssh_port}}:22"
+
+  - name: add container 1 to inventory
+    add_host:
+      name: sshubucon1
+      ansible_connection: docker
+      ansible_docker_extra_args: "-H=unix:///var/run/docker.sock"
+      ansible_user: root
+    changed_when: false
+
+  - name: add container 2 to inventory
+    add_host:
+      name: sshubucon2
+      ansible_connection: docker
+      ansible_docker_extra_args: "-H=unix:///var/run/docker.sock"
+      ansible_user: root
+    changed_when: false
+
+  - name: generate client certificate
+    shell:
+      creates="/home/{{user_name}}/.ssh/id_rsa"
+      ssh-keygen -q -N "" -t rsa -f "/home/{{user_name}}/.ssh/id_rsa"
+    delegate_to: sshubucon1
+
+  - name: set right permissions on client certificate directory
+    file:
+      dest: "/home/{{user_name}}/.ssh"
+      owner: "{{user_name}}"
+      group: "{{user_name}}"
+      mode: 0700
+      state: directory
+    delegate_to: sshubucon1
+
+  - name: set right permissions on client certificate files
+    shell: 
+      find "/home/{{user_name}}/.ssh" -type f -exec chmod -c 0600 {} \;
+    delegate_to: sshubucon1
+
+  - name: get public key for client certificate
+    shell:
+      "cat /home/{{user_name}}/.ssh/id_rsa.pub"
+    changed_when: false
+    register: _id_rsa_pub
+    delegate_to: sshubucon1
+
+  - name: push public key to container2
+    authorized_key:
+      key: "{{_id_rsa_pub.stdout}}"
+      manage_dir: false
+      path: "/home/{{user_name}}/.ssh/authorized_keys"
+      user: "{{user_name}}"
+    delegate_to: sshubucon2
+
+  remote_user: mehdi
+  become: yes
+  become_method: sudo
+#  environment:
+#    http_proxy: http://192.168.110.2:8123
+#    https_proxy: http://192.168.110.2:8123
+
